@@ -2,11 +2,8 @@
 - name: Instala K8
   hosts: k8
   vars:
-    - k8_user: toni
+    - k8_user: root
   tasks:
-
-  - name: workarround problema resolver dns
-    command: "systemd-resolve --status"
 
   - name: Install packages that allow apt to be used over HTTPS
     apt:
@@ -18,38 +15,76 @@
       - apt-transport-https
       - ca-certificates
       - curl
-      - gnupg-agent
-      - software-properties-common
+      - gnupg2
       - gpg
-  - name: Instala docker
-    apt:
-      name: docker.io
-      update_cache: yes
-      state: latest
-
-  - name: Enable docker
-    systemd: 
-      name: docker
-      state: started
-      enabled: yes
 
   - name: Añade key del repo de k8
     apt_key:
-      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg  
+      url: "https://packages.cloud.google.com/apt/doc/apt-key.gpg"
+
+  - name: Añade key del repo de docker
+    apt_key:
+      url: "https://download.docker.com/linux/debian/gpg"
 
   - name: Add kubernetes respository
     apt_repository:
       repo: "deb http://apt.kubernetes.io/ kubernetes-xenial main"
       update-cache: yes
 
+  - name: Add docker respository
+    apt_repository:
+      repo: "deb [arch=amd64] https://download.docker.com/linux/debian buster stable"
+      update-cache: yes
+
+  - name: Instala docker
+    apt:
+      name: "{{ packages_docker }}"
+      update_cache: yes
+      state: latest
+    vars:
+      packages_docker:
+      - docker-ce
+      - docker-ce-cli 
+      - containerd.io
+
   - name: Instala kubeadm
     apt:
-      name: kubeadm
-       
+      name: "{{ packages_k8 }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages_k8:
+      - kubeadm
+      - kubectl
+      - kubelet
+      - bash-completion
+
   - name: Deshabilita swap
     command: "swapoff -a"
 
-  - name: Inicializa nodo maestro  
+  - name: Configurar docker para usar systemcd como cfgroupdriver
+    copy:
+      dest: "/etc/docker/daemon.json"
+      content: |
+        {  "exec-opts": ["native.cgroupdriver=systemd"] }
+
+  - name: Enable docker
+    systemd:
+      name: docker
+      state: started
+      enabled: yes
+
+  - name: Enable kubelet
+    systemd:
+     name: kubelet
+     state: started
+     enabled: yes
+
+  - name: Reset Kubernetes 
+    shell: "kubeadm reset --force "
+    ignore_errors: True
+
+  - name: Inicializa nodo maestro
     command: "kubeadm init --pod-network-cidr=10.244.0.0/16"
     register: salida_kubeadm_init
     when: "'masters' in group_names"
@@ -63,12 +98,13 @@
   - name: Trae a host de control la conf de k8 del mnaster
     fetch:
       src: /etc/kubernetes/admin.conf
+      flat: yes
       dest: /tmp/
     when: "'masters' in group_names"
 
   - name: Copia config kube
     copy:
-      src: "/tmp/master/etc/kubernetes/admin.conf"
+      src: "/tmp/admin.conf"
       dest: "~{{ k8_user }}/.kube/config"
       owner: "{{ k8_user }}"
       group: "{{ k8_user }}"
@@ -86,8 +122,16 @@
     # - name: Muestra join
     #debug: var=hostvars['master'].comando_join.stdout
 
+    #
+    #  Si da error de swap al hacer un docker info
+    #  - Añadir a /etc/default/grub 
+    #                   GRUB_CMDLINE_LINUX="cgroup_enable=memory swapaccount=1"
+    #  - update-grub
+    #
+
+
   - name: Ejecuta kubeadm join en workers
-    command: "{{ hostvars['master'].comando_join.stdout }}" 
+    command: "{{ hostvars['master'].comando_join.stdout }}"
     register: salida_kubeadm_join
     when: "'workers' in group_names"
 
@@ -95,4 +139,3 @@
     debug: var=salida_kubeadm_join.stdout
     when: "'workers' in group_names"
 
-     
