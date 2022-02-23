@@ -1,0 +1,117 @@
+---
+ - name: Install packages that allow apt to be used over HTTPS
+    apt:
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+
+  - name: Añade key del repo de k8
+    apt_key:
+      url: "https://packages.cloud.google.com/apt/doc/apt-key.gpg"
+
+  - name: Añade key del repo de docker
+    apt_key:
+      url: "https://download.docker.com/linux/debian/gpg"
+
+  - name: Add kubernetes respository
+    apt_repository:
+      repo: "deb http://apt.kubernetes.io/ kubernetes-xenial main"
+      update-cache: yes
+
+  - name: Add docker respository
+    apt_repository:
+      repo: "deb [arch=amd64] https://download.docker.com/linux/debian buster stable"
+      update-cache: yes
+
+  - name: Instala docker
+    apt:
+      name: "{{ packages_docker }}"
+      update_cache: yes
+      state: latest
+
+  - name: Instala kubeadm
+    apt:
+      name: "{{ packages_k8 }}"
+      state: present
+      update_cache: yes
+
+  - name: Deshabilita swap
+    command: "swapoff -a"
+
+  - name: Configurar docker para usar systemcd como cfgroupdriver
+    copy:
+      dest: "/etc/docker/daemon.json"
+      content: |
+        {  "exec-opts": ["native.cgroupdriver=systemd"] }
+
+  - name: Enable docker
+    systemd:
+      name: docker
+      state: started
+      enabled: yes
+
+  - name: Enable kubelet
+    systemd:
+     name: kubelet
+     state: started
+     enabled: yes
+
+  - name: Reset Kubernetes 
+    shell: "kubeadm reset --force "
+    ignore_errors: True
+
+  - name: Inicializa nodo maestro
+    command: "kubeadm init --pod-network-cidr=10.244.0.0/16"
+    register: salida_kubeadm_init
+    when: "'masters' in group_names"
+
+  - name: Copia config a usuario
+    file:
+      path: "~{{ k8_user }}/.kube"
+      state: directory
+    become_user: "{{ k8_user }}"
+
+  - name: Trae a host de control la conf de k8 del mnaster
+    fetch:
+      src: /etc/kubernetes/admin.conf
+      flat: yes
+      dest: /tmp/
+    when: "'masters' in group_names"
+
+  - name: Copia config kube
+    copy:
+      src: "/tmp/admin.conf"
+      dest: "~{{ k8_user }}/.kube/config"
+      owner: "{{ k8_user }}"
+      group: "{{ k8_user }}"
+
+  - name: Despliega red flannel
+    command: "kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml"
+    become_user: "{{ k8_user }}"
+    when: "'masters' in group_names"
+
+  - name: Obtener comando join para los workers
+    command: "kubeadm token create --print-join-command"
+    register: comando_join
+    when: "'masters' in group_names"
+
+    # - name: Muestra join
+    #debug: var=hostvars['master'].comando_join.stdout
+
+    #
+    #  Si da error de swap al hacer un docker info
+    #  - Añadir a /etc/default/grub 
+    #                   GRUB_CMDLINE_LINUX="cgroup_enable=memory swapaccount=1"
+    #  - update-grub
+    #
+
+
+  - name: Ejecuta kubeadm join en workers
+    command: "{{ hostvars['master'].comando_join.stdout }}"
+    register: salida_kubeadm_join
+    when: "'workers' in group_names"
+
+  - name: Mostrar salida join
+    debug: var=salida_kubeadm_join.stdout
+    when: "'workers' in group_names"
+

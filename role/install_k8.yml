@@ -1,0 +1,7 @@
+---
+- name: Instala K8
+  hosts: k8
+
+  roles:
+    - install_k8
+

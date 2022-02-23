@@ -1,0 +1,24 @@
+---
+# vars file for install_k8
+k8_user: root
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg2
+  - gpg
+
+packages_docker:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+
+packages_k8:
+  - kubeadm
+  - kubectl
+  - kubelet
+  - bash-completion
+
+
+
